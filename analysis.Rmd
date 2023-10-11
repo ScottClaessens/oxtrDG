@@ -1,0 +1,307 @@
+---
+title: "DG Difference Score Analysis"
+author: "Brian Coxford"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+# install.packages(c("tidyverse","brms"))
+library(tidyverse)
+library(brms)
+```
+
+# Download and filter data
+
+```{r}
+d <- 
+  # download data
+  read_csv(
+    "data.csv", 
+    na = c("", "NA", "999", "888"),
+    show_col_types = FALSE) %>%
+  # remove cases with InOutStudy = 0
+  filter(InOut_Study == 1) %>%
+  # keep cases where total stickers shared is 7
+  filter(Share_total_DG1 == 7 | is.na(Share_total_DG1)) %>%
+  filter(Share_total_DG2 == 7 | is.na(Share_total_DG2)) %>%
+  # code gender and oxytocin categories
+  mutate(
+    Gender = ifelse(Gender == 1, "Male", "Female"),
+    OXTR_2cat = ifelse(OXTR_2cat == 1, "GG", "AA-AG")
+  )
+```
+
+# Histograms of outcome variables
+
+```{r}
+ggplot(d, aes(x = SharePeer_DG1_C1)) +
+  geom_histogram() +
+  scale_x_continuous(breaks = 0:7)
+```
+
+```{r}
+# Calculate the mean
+mean_value <- mean(d$SharePeer_DG1_C1, na.rm = TRUE)
+# Calculate the standard deviation
+sd_value <- sd(d$SharePeer_DG1_C1, na.rm = TRUE)
+# Calculate the range
+range_value <- range(d$SharePeer_DG1_C1, na.rm = TRUE)
+# Print the results
+cat("Mean:", mean_value, "\n")
+cat("Standard Deviation:", sd_value, "\n")
+cat("Range:", range_value[1], "to", range_value[2], "\n")
+```
+
+```{r}
+ggplot(d, aes(x = DG_difference_score)) +
+  geom_histogram() +
+  scale_x_continuous(breaks = -7:7)
+```
+
+```{r}
+# Calculate the mean for 'DG_difference_score'
+mean_diff_score <- mean(d$DG_difference_score, na.rm = TRUE)
+# Calculate the standard deviation for 'DG_difference_score'
+sd_diff_score <- sd(d$DG_difference_score, na.rm = TRUE)
+# Calculate the range for 'DG_difference_score'
+range_diff_score <- range(d$DG_difference_score, na.rm = TRUE)
+# Print the results
+cat("Mean (DG_difference_score):", mean_diff_score, "\n")
+cat("Standard Deviation (DG_difference_score):", sd_diff_score, "\n")
+cat("Range (DG_difference_score):", range_diff_score[1], "to", range_diff_score[2], "\n")
+```
+
+# Preliminary Q1. DG1 ~ Age
+
+```{r}
+cor.test(d$SharePeer_DG1_C1,d$Age_p5,
+         method = "kendall")
+```
+
+# Preliminary Q2. DG1 ~ CC score DG1
+
+```{r}
+cor.test(d$SharePeer_DG1_C1,d$CCscore_percentage_DG1,
+         method = "kendall")
+```
+
+# Preliminary Q3. DGdiff ~ Age
+
+```{r}
+cor.test(d$DG_difference_score,d$Age_p5,
+         method = "kendall")
+```
+
+# Preliminary Q4. DGdiff ~ CC score DG1
+
+```{r}
+cor.test(d$DG_difference_score,d$CCscore_percentage_DG1,
+         method = "kendall")
+```
+
+# Preliminary Q5. DGdiff ~ CC score DG2
+
+```{r}
+cor.test(d$DG_difference_score,d$CCscore_percentage_DG2,
+         method = "kendall")
+```
+
+# Q1. DG1 ~ Gender x Oxy
+
+```{r}
+# add 1 to outcome variable for positive integers
+d$SharePeer_DG1_C1 <- d$SharePeer_DG1_C1 + 1
+# fit bayesian ordinal regression
+m1 <- 
+  brm(
+    formula = SharePeer_DG1_C1 ~ Gender * OXTR_2cat,
+    data = d,
+    family = cumulative,
+    prior = prior(normal(0, 2), class = b),
+    cores = 4,
+    control = list(adapt_delta = 0.99),
+    seed = 2113
+  )
+
+m1
+
+plot(
+  conditional_effects(m1), 
+  points = TRUE, 
+  jitter_width = 0.1,
+  point_args = list(height = 0.2, alpha = 0.7),
+  plot = FALSE
+  )[[3]] +
+  scale_y_continuous(
+    name = "Number of stickers shared in DG1",
+    breaks = 1:8,
+    limits = c(1, 8),
+    labels = function(x) x - 1
+    )
+
+# get the means for all four groups
+f <- 
+  fitted(
+    m1,
+    newdata = data.frame(
+      Gender = c("Female", "Male", "Female", "Male"),
+      OXTR_2cat = c("AA-AG", "AA-AG", "GG", "GG")
+    ),
+    summary = FALSE
+  )
+meanAAgirls <- apply(f, 1, function(x) sum(x[1,] * 0:7))
+meanAAboys  <- apply(f, 1, function(x) sum(x[2,] * 0:7))
+meanGGgirls <- apply(f, 1, function(x) sum(x[3,] * 0:7))
+meanGGboys  <- apply(f, 1, function(x) sum(x[4,] * 0:7))
+quantile(meanGGboys, c(0.025, 0.5, 0.975))
+quantile(meanAAboys, c(0.025, 0.5, 0.975))
+quantile(meanGGgirls, c(0.025, 0.5, 0.975))
+quantile(meanAAgirls, c(0.025, 0.5, 0.975))
+# compute contrasts between means
+diff1 <- meanAAgirls - meanAAboys
+diff2 <- meanAAgirls - meanGGgirls
+diff3 <- meanAAgirls - meanGGboys
+diff4 <- meanAAboys  - meanGGgirls
+diff5 <- meanAAboys  - meanGGboys
+diff6 <- meanGGgirls - meanGGboys
+# get 95% credible intervals for contrasts
+quantile(diff1, c(0.025, 0.5, 0.975))
+quantile(diff2, c(0.025, 0.5, 0.975))
+quantile(diff3, c(0.025, 0.5, 0.975))
+quantile(diff4, c(0.025, 0.5, 0.975))
+quantile(diff5, c(0.025, 0.5, 0.975))
+quantile(diff6, c(0.025, 0.5, 0.975))
+```
+
+# Q2. DGDiff ~ Gender x Oxy
+
+```{r}
+# add 8 to outcome variable for positive integers
+d$DG_difference_score <- d$DG_difference_score + 8
+# fit bayesian ordinal regression
+m2 <- 
+  brm(
+    formula = DG_difference_score | thres(14) ~ Gender * OXTR_2cat,
+    data = d,
+    family = cumulative,
+    prior = prior(normal(0, 2), class = b),
+    cores = 4,
+    control = list(adapt_delta = 0.99),
+    seed = 2113
+  )
+
+m2
+
+plot(
+  conditional_effects(m2),
+  points = TRUE, 
+  jitter_width = 0.1,
+  point_args = list(height = 0.2, alpha = 0.7),
+  plot = FALSE
+  )[[3]] +
+  scale_y_continuous(
+    name = "Difference score for number of stickers shared",
+    breaks = 1:15,
+    limits = c(1, 15),
+    labels = function(x) x - 8
+    )
+# get the means for all four groups
+f <- 
+  fitted(
+    m2,
+    newdata = data.frame(
+      Gender = c("Female", "Male", "Female", "Male"),
+      OXTR_2cat = c("AA-AG", "AA-AG", "GG", "GG")
+    ),
+    summary = FALSE
+  )
+meanAAgirls <- apply(f, 1, function(x) sum(x[1,] * -7:7))
+meanAAboys  <- apply(f, 1, function(x) sum(x[2,] * -7:7))
+meanGGgirls <- apply(f, 1, function(x) sum(x[3,] * -7:7))
+meanGGboys  <- apply(f, 1, function(x) sum(x[4,] * -7:7))
+quantile(meanGGboys, c(0.025, 0.5, 0.975))
+quantile(meanAAboys, c(0.025, 0.5, 0.975))
+quantile(meanGGgirls, c(0.025, 0.5, 0.975))
+quantile(meanAAgirls, c(0.025, 0.5, 0.975))
+# compute contrasts between means
+diff1 <- meanAAgirls - meanAAboys
+diff2 <- meanAAgirls - meanGGgirls
+diff3 <- meanAAgirls - meanGGboys
+diff4 <- meanAAboys  - meanGGgirls
+diff5 <- meanAAboys  - meanGGboys
+diff6 <- meanGGgirls - meanGGboys
+# get 95% credible intervals for contrasts
+quantile(diff1, c(0.025, 0.5, 0.975))
+quantile(diff2, c(0.025, 0.5, 0.975))
+quantile(diff3, c(0.025, 0.5, 0.975))
+quantile(diff4, c(0.025, 0.5, 0.975))
+quantile(diff5, c(0.025, 0.5, 0.975))
+quantile(diff6, c(0.025, 0.5, 0.975))
+```
+
+# Q3. DGDiff ~ Oxy x Affiliation x Gender
+
+```{r}
+# fit bayesian ordinal regression
+m3 <- 
+  brm(
+    formula = DG_difference_score | thres(14) ~ Overall_Affiliation_PEER * OXTR_2cat * Gender,
+    data = d,
+    family = cumulative,
+    prior = prior(normal(0, 2), class = b),
+    cores = 4,
+    control = list(adapt_delta = 0.99),
+    seed = 2113
+  )
+
+m3
+
+plot(
+  conditional_effects(
+    m3,
+    effects = "Overall_Affiliation_PEER:OXTR_2cat",
+    conditions = make_conditions(m3, "Gender")
+  ),
+  points = TRUE,
+  point_args = list(width = 0.1, height = 0.2, alpha = 0.7),
+  plot = FALSE
+  )[[1]] +
+  scale_y_continuous(
+    name = "Difference score for number of stickers shared",
+    breaks = 1:15,
+    limits = c(1, 15),
+    labels = function(x) x - 8
+    )
+
+# get the slopes for all four groups
+post <- posterior_samples(m3)
+slopeAAgirls <- post$b_Overall_Affiliation_PEER
+slopeAAboys  <- post$b_Overall_Affiliation_PEER + 
+                post$`b_Overall_Affiliation_PEER:GenderMale`
+slopeGGgirls <- post$b_Overall_Affiliation_PEER + 
+                post$`b_Overall_Affiliation_PEER:OXTR_2catGG`
+slopeGGboys  <- post$b_Overall_Affiliation_PEER + 
+                post$`b_Overall_Affiliation_PEER:OXTR_2catGG` +
+                post$`b_Overall_Affiliation_PEER:GenderMale` +
+                post$`b_Overall_Affiliation_PEER:OXTR_2catGG:GenderMale`
+quantile(slopeGGboys, c(0.025, 0.5, 0.975))
+quantile(slopeAAboys, c(0.025, 0.5, 0.975))
+quantile(slopeGGgirls, c(0.025, 0.5, 0.975))
+quantile(slopeAAgirls, c(0.025, 0.5, 0.975))
+# compute contrasts between slopes
+diff1 <- slopeAAgirls - slopeAAboys
+diff2 <- slopeAAgirls - slopeGGgirls
+diff3 <- slopeAAgirls - slopeGGboys
+diff4 <- slopeAAboys  - slopeGGgirls
+diff5 <- slopeAAboys  - slopeGGboys
+diff6 <- slopeGGgirls - slopeGGboys
+# get 95% credible intervals for contrasts
+quantile(diff1, c(0.025, 0.5, 0.975))
+quantile(diff2, c(0.025, 0.5, 0.975))
+quantile(diff3, c(0.025, 0.5, 0.975))
+quantile(diff4, c(0.025, 0.5, 0.975))
+quantile(diff5, c(0.025, 0.5, 0.975))
+quantile(diff6, c(0.025, 0.5, 0.975))
+```
